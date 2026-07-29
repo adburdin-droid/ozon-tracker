@@ -296,20 +296,26 @@ export async function onRequest(context) {
       lines.push("", kind === "strategy"
         ? "Составь стратегию продвижения: что для товара работает и как это масштабировать."
         : "Составь карту боли: что для товара НЕ работает и чего делать нельзя.");
-      try {
-        const r = await env.AI.run(AI_MODEL, {
-          messages: [
-            { role: "system", content: kind === "strategy" ? SYS_STRATEGY : SYS_PAIN },
-            { role: "user", content: lines.join("\n") },
-          ],
-          max_tokens: 700, temperature: 0.3,
-        });
-        const text = ((r && (r.response || r.result || r.text)) || "").toString().trim();
-        if (!text) return err("ИИ вернул пустой ответ", 502);
-        return json({ ok: true, text });
-      } catch (e) {
-        return err("Ошибка Workers AI: " + (e && e.message ? e.message : String(e)), 502);
+      let lastErr = "";
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const r = await env.AI.run(AI_MODEL, {
+            messages: [
+              { role: "system", content: kind === "strategy" ? SYS_STRATEGY : SYS_PAIN },
+              { role: "user", content: lines.join("\n") },
+            ],
+            max_tokens: 700, temperature: 0.3,
+          });
+          const text = ((r && (r.response || r.result || r.text)) || "").toString().trim();
+          if (text) return json({ ok: true, text });
+          lastErr = "модель вернула пустой ответ";
+        } catch (e) {
+          lastErr = (e && e.message) ? e.message : String(e);
+          // холодный старт модели — короткая пауза и повтор
+          await new Promise((res) => setTimeout(res, 800));
+        }
       }
+      return err("Ошибка Workers AI (" + AI_MODEL + "): " + lastErr, 502);
     }
 
     return err("Неизвестный маршрут: " + method + " " + path, 404);
