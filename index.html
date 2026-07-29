@@ -1026,7 +1026,8 @@ function showModal(title,bodyHTML,wide){
 
 let STATE={snap:null,view:'tracker',bed:null,camp:null,chartRange:30,week:null};
 function curList(){return DB.all();}
-function setCurrentToLatest(){const l=curList();STATE.snap=l[l.length-1];prepBeds(STATE.snap);}
+function snapHasData(sn){if(!sn||!sn.beds)return false;let n=0;for(const k in sn.beds){const b=sn.beds[k];n+=(b&&b.campaigns&&b.campaigns.length)||(b&&b.count)||0;}return n>0;}
+function setCurrentToLatest(){const l=curList();let sn=null;for(let i=l.length-1;i>=0;i--){if(snapHasData(l[i])){sn=l[i];break;}}if(!sn)sn=l[l.length-1];STATE.snap=sn;prepBeds(STATE.snap);}
 function prevSnap(){const l=curList();const i=l.findIndex(s=>s.report_date===STATE.snap.report_date);const p=i>0?l[i-1]:null;if(p)prepBeds(p);return p;}
 
 /* ============================================================
@@ -2525,6 +2526,7 @@ function handleFile(file){
     try{
       const wb=XLSX.read(e.target.result,{type:'array'});
       const snap=buildSnapshot(wb);
+      if(!snapHasData(snap)){toast('Файл не распознан как сводный отчёт мониторинга — данные НЕ загружены. Нужен отчёт с листами «Анализ кампаний» и т.п., а не сырая выгрузка или остатки.',true);return;}
       DB.add(snap); STATE.snap=snap; prepBeds(snap);
       go('garden'); toast('Отчёт за '+snap.report_date+' добавлен в трекер ');
     }catch(err){console.error(err);toast('Не удалось разобрать файл: '+err.message,true);}
@@ -2888,6 +2890,8 @@ var Sync={
   _evt(o){SyncCache.feed.unshift(Object.assign({id:'tmp-'+Date.now(),created_at:Date.now(),author:USER||'аноним'},o));if(SyncCache.feed.length>400)SyncCache.feed.pop();},
   postComment(id,text){
     if(!text)return;
+    const th=SyncCache.threads[id]||[];const last=th[th.length-1];
+    if(last&&(last.text||'').trim()===(text||'').trim()&&(Date.now()-(last.ts||0))<90000){toast('Такой комментарий только что добавлен — пропущено');return;}
     const it={author:USER||'аноним',text:text,ts:Date.now()};
     (SyncCache.threads[id]=SyncCache.threads[id]||[]).push(it);
     SyncCache.comments[id]={text:it.text,author:it.author,ts:it.ts};
