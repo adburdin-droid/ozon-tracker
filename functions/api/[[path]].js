@@ -5,6 +5,20 @@
 //  (сайт целиком закрыт общим паролем на фронте, отдельных паролей нет).
 // ============================================================
 
+// Модель Workers AI. Можно поменять на более сильную (лучше русский), например:
+// "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+const AI_MODEL = "@cf/meta/llama-3.1-8b-instruct";
+
+const SYS_STRATEGY = "Ты — старший маркетолог-аналитик маркетплейса OZON. На основе истории комментариев команды по ОДНОМУ товару выдели рабочую СТРАТЕГИЮ ПРОДВИЖЕНИЯ: что для этого товара сработало хорошо и как это масштабировать. " +
+  "Опирайся ТОЛЬКО на факты из комментариев и метрики товара, ничего не выдумывай; если данных мало — честно укажи это. " +
+  "Формат: 3–6 коротких пунктов, каждый — конкретное действие (что делать и почему это сработало). Без общих фраз и воды. Отвечай на русском. " +
+  "Учитывай практику OZON: инструменты (Оплата за клик/ОЗК, Оплата за заказ/ОЗЗ, Медийная, Трафареты), ДРР как ключевую метрику эффективности, влияние на СПП и индекс цен, важность остатков и качества карточки. Рекомендации должны быть применимы в кабинете OZON.";
+
+const SYS_PAIN = "Ты — старший маркетолог-аналитик маркетплейса OZON. На основе истории комментариев команды по ОДНОМУ товару составь КАРТУ БОЛИ: что для этого товара НЕ работает и чего делать НЕЛЬЗЯ. " +
+  "Опирайся ТОЛЬКО на факты из комментариев и метрики, ничего не выдумывай; если данных мало — честно укажи это. " +
+  "Формат: 3–6 коротких пунктов-предостережений (что не делать и почему это навредило: рост ДРР, слив бюджета, падение выручки и т.п.). Без воды. Отвечай на русском. " +
+  "Учитывай практику OZON (ОЗК/ОЗЗ/Медийная/Трафареты, ДРР, СПП, индекс цен, остатки, контент карточки). Рекомендации применимы в кабинете OZON.";
+
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
 
 function json(data, status = 200) {
@@ -49,6 +63,12 @@ function feedRows(rows) {
   }));
 }
 
+async function readComments(db) {
+  const { results } = await db
+    .prepare("SELECT camp_id, author, text, created_at FROM comments WHERE id IN (SELECT MAX(id) FROM comments GROUP BY camp_id)")
+    .all();
+  return commentsLatest(results || []);
+}
 async function readCommentsAll(db, limit = 4000) {
   const { results } = await db
     .prepare("SELECT camp_id, author, text, created_at FROM comments ORDER BY id DESC LIMIT ?")
@@ -231,6 +251,65 @@ export async function onRequest(context) {
       await db.prepare("INSERT INTO kv (k, v, updated_at) VALUES (?, ?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at")
         .bind(key, v, now()).run();
       return json({ ok: true });
+    }
+
+    // -------- заметки по товару: «Стратегия продвижения» и «Карта боли» --------
+    // Хранятся одним ключом product_notes в таблице kv (server-side merge — без затирания).
+    if (path === "/notes" && method === "GET") {
+      const row = await db.prepare("SELECT v FROM kv WHERE k = 'product_notes'").first();
+      let notes = {};
+      if (row && row.v) { try { notes = JSON.parse(row.v); } catch (e) {} }
+      return json({ ok: true, notes });
+    }
+    if (path === "/notes" && method === "POST") {
+      const body = await request.json();
+      const art = String(body.art || "").slice(0, 200);
+      const kind = body.kind === "pain" ? "pain" : "strategy";
+      if (!art) return err("art обязателен");
+      const who = author(request);
+      const t = now();
+      const row = await db.prepare("SELECT v FROM kv WHERE k = 'product_notes'").first();
+      let notes = {};
+      if (row && row.v) { try { notes = JSON.parse(row.v); } catch (e) {} }
+      notes[art] = notes[art] || {};
+      notes[art][kind] = { text: String(body.text || "").slice(0, 6000), author: who, ts: t, ai: !!body.ai };
+      const v = JSON.stringify(notes);
+      if (v.length > 1900000) return err("Слишком много заметок для одной строки D1 (>1.9 МБ)", 413);
+      await db.prepare("INSERT INTO kv (k, v, updated_at) VALUES ('product_notes', ?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at")
+        .bind(v, t).run();
+      return json({ ok: true });
+    }
+
+    // -------- ИИ-анализ комментариев (Cloudflare Workers AI) --------
+    if (path === "/ai" && method === "POST") {
+      if (!env.AI) return err("Workers AI не подключён к проекту. Добавьте привязку 'AI' в Settings → Bindings.", 503);
+      const body = await request.json();
+      const kind = body.kind === "pain" ? "pain" : "strategy";
+      const p = body.product || {};
+      const comments = Array.isArray(body.comments) ? body.comments.slice(0, 120) : [];
+      if (!comments.length) return err("Нет комментариев для анализа");
+      const lines = [];
+      lines.push("Товар: " + (p.name || p.art || "—") + (p.art ? " (арт. " + p.art + ")" : "") + (p.brand ? ", бренд " + p.brand : ""));
+      if (p.metrics) lines.push("Текущие метрики: " + p.metrics);
+      lines.push("", "История комментариев маркетологов (от старых к новым):");
+      comments.forEach((c, i) => lines.push((i + 1) + ". [" + (c.author || "—") + (c.ts ? ", " + c.ts : "") + "] " + (c.text || "")));
+      lines.push("", kind === "strategy"
+        ? "Составь стратегию продвижения: что для товара работает и как это масштабировать."
+        : "Составь карту боли: что для товара НЕ работает и чего делать нельзя.");
+      try {
+        const r = await env.AI.run(AI_MODEL, {
+          messages: [
+            { role: "system", content: kind === "strategy" ? SYS_STRATEGY : SYS_PAIN },
+            { role: "user", content: lines.join("\n") },
+          ],
+          max_tokens: 700, temperature: 0.3,
+        });
+        const text = ((r && (r.response || r.result || r.text)) || "").toString().trim();
+        if (!text) return err("ИИ вернул пустой ответ", 502);
+        return json({ ok: true, text });
+      } catch (e) {
+        return err("Ошибка Workers AI: " + (e && e.message ? e.message : String(e)), 502);
+      }
     }
 
     return err("Неизвестный маршрут: " + method + " " + path, 404);
