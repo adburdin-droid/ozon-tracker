@@ -43,7 +43,7 @@ button{font-family:inherit;cursor:pointer;border:none;background:none}
 .avatar{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#FF8A00,#E0218A);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
 
 /* ---------- Main ---------- */
-.main{padding:24px 30px 60px;max-width:1320px;width:100%}
+.main{padding:24px 30px 60px;max-width:1320px;width:100%;margin:0 auto}
 .topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px}
 .h1{font-size:25px;font-weight:800;letter-spacing:-.4px;display:flex;align-items:center;gap:9px}
 .h1 .info{width:18px;height:18px;color:var(--muted)}
@@ -1606,26 +1606,85 @@ function autoMilestones(){
   return out.filter(e=>!dismissed.has(e.key));
 }
 function monFeed(m){
-  const feed=changeFeed(),q=(STATE.feedSearch||'').toLowerCase(),af=STATE.feedAction||'';
-  let rows=af?feed.filter(r=>r.action===af):feed;
-  if(q)rows=rows.filter(r=>{const c=r.c,nm=c?c.name:'',art=c?campArt(c):'';return String(nm).toLowerCase().includes(q)||String(r.id).toLowerCase().includes(q)||String(art||'').toLowerCase().includes(q)||String(r.comment).toLowerCase().includes(q);});
-  const actMeta={scale:['Масштабировали','#16A34A'],keep:['Отслеживаем','#2D7CFF'],restart:['Перезапуск','#E5484D'],comment:['Комментарий','#6b7689'],undo:['Вернули в работу','#9AA3B0']};
+  const feed=changeFeed();
+  const q=(STATE.feedSearch||'').toLowerCase();
+  const prods={};
+  feed.forEach(r=>{
+    const c=r.c; const art=(c?(campArt(c)||c.name):null)||(c?String(c.name):('РК '+r.id));
+    const P=prods[art]||(prods[art]={art:art,name:(c&&c.name)||art,brand:(c&&c.brand)||'',comments:[],last:0});
+    if(r.ts>P.last)P.last=r.ts;
+    if(c&&c.name)P.name=c.name;
+    if(r.action==='comment'&&r.comment)P.comments.push({author:r.author||'—',ts:r.ts,text:r.comment});
+  });
+  const met={};
+  trkAll().forEach(c=>{const a=campArt(c)||c.name;if(!a)return;const k=String(a);const mm=met[k]||(met[k]={spend:0,rev:0,orders:0,stock:null,brand:c.brand,tools:new Set()});mm.spend+=(+c.spend||0);mm.rev+=(+c.rev||0);mm.orders+=(+c.orders||0);if(c.stock!=null)mm.stock=c.stock;if(c._bed)mm.tools.add(c._bed);if(!mm.brand)mm.brand=c.brand;});
+  let list=Object.values(prods).sort((a,b)=>b.last-a.last);
+  if(q)list=list.filter(P=>String(P.name).toLowerCase().includes(q)||String(P.art).toLowerCase().includes(q)||P.comments.some(c=>String(c.text).toLowerCase().includes(q)));
+  const PMAP={}; list.forEach(P=>PMAP[P.art]=P);
+  const notes=(SHARED&&SyncCache.notes)||{};
+  const bChip=b=>b?`<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:${/harly/i.test(b)?'#FFF0E8':'#E8F0FF'};color:${/harly/i.test(b)?'#E0691A':'#005BFF'}">${esc(b)}</span>`:'';
+  const tChips=t=>[...t].map(b=>{const tm=TOOL_META[b];return tm?`<span class="tool-chip" style="--c:${tm[1]}">${tm[0]}</span>`:'';}).join('');
+  const aiBlk=(P,kind,title,accent)=>{
+    const n=(notes[P.art]||{})[kind]||{};
+    const info=n.ts?`${n.ai?'ИИ':'вручную'} · ${esc(n.author||'')} · ${fmtDT(n.ts)}`:'ещё не заполнено';
+    const ph=kind==='strategy'?'Что для товара работает и как масштабировать…':'Что для товара не работает и чего избегать…';
+    return `<div class="ai-blk" style="flex:1;min-width:280px;background:#fff;border:1px solid var(--line);border-left:3px solid ${accent};border-radius:12px;padding:12px 14px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><b style="color:${accent};font-size:13.5px">${title}</b>
+        <button class="ai-gen" data-art="${esc(P.art)}" data-kind="${kind}" style="margin-left:auto;font-size:11.5px;font-weight:600;border:1px solid ${accent};color:${accent};background:transparent;border-radius:7px;padding:4px 10px;cursor:pointer">✦ Сгенерировать ИИ</button></div>
+      <textarea class="ai-ta" data-kind="${kind}" placeholder="${ph}" style="width:100%;min-height:92px;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;font-size:13px;line-height:1.45;color:var(--ink);background:#fff">${esc(n.text||'')}</textarea>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+        <button class="ai-save" data-art="${esc(P.art)}" data-kind="${kind}" style="font-size:11.5px;font-weight:600;background:${accent};color:#fff;border:none;border-radius:7px;padding:5px 12px;cursor:pointer">Сохранить</button>
+        <button class="ai-clear" data-art="${esc(P.art)}" data-kind="${kind}" style="font-size:11.5px;color:var(--muted);background:transparent;border:none;cursor:pointer">Очистить</button>
+        <span style="margin-left:auto;font-size:11px;color:var(--muted)">${info}</span></div>
+    </div>`;
+  };
   const card=el('div','trk-block');
-  card.innerHTML=`<div class="trk-bh"><span class="trk-bn" style="--c:#2D7CFF">≡</span>Лента изменений <span class="trk-bhs">все решения и комментарии по кампаниям, по времени · ${feed.length} записей</span></div>
-    <div class="art-inline-ctrl"><div class="st-tabs">${[['','Все'],['scale','Масштабировали'],['keep','Отслеживаем'],['restart','Перезапуск']].map(t=>`<button class="art-tab ${af===t[0]?'on':''}" data-fa="${t[0]}">${t[1]}</button>`).join('')}</div>
-      <input class="art-search" id="feedSearch" placeholder="Поиск по РК / артикулу / комментарию…" value="${esc(STATE.feedSearch||'')}"></div>
-    <div class="feed-list">${rows.length?rows.map(r=>{const c=r.c,am=actMeta[r.action]||['—','#9AA3B0'],tm=c?TOOL_META[c._bed]:null,now=c?c.status:null,nowM=now?(ST[now]||{color:'#9AA3B0',label:now}):null,fromM=r.from?(ST[r.from]||{color:'#9AA3B0',label:r.from}):null;
-      return `<div class="feed-row" ${c?`data-bed="${c._bed}" data-id="${esc(String((c.id!=null&&typeof c.id==='number')?c.id:c.name))}"`:''}>
-        <div class="feed-date">${fmtDT(r.ts)}</div>
-        <div class="feed-main">
-          <div class="feed-l1">${tm?`<span class="tool-chip" style="--c:${tm[1]}">${tm[0]}</span>`:''}<span class="feed-name">${esc(c?c.name:('РК '+r.id))}</span>${c&&c.id!=null&&typeof c.id==='number'?`<span class="camp-id" style="display:inline">ID ${c.id}</span>`:''}${c&&campArt(c)?`<span class="gs-art">${esc(campArt(c))}</span>`:''}${r.author?`<span style="margin-left:auto;font-size:11px;font-weight:700;color:#6b7689;background:#F0F3F8;padding:2px 8px;border-radius:6px;white-space:nowrap">${esc(r.author)}</span>`:''}</div>
-          <div class="feed-l2"><span class="feed-act" style="background:${am[1]}1a;color:${am[1]}">${am[0]}</span>${(fromM&&nowM&&r.from!==now)?`<span class="feed-tr">${fromM.label} → ${nowM.label}</span>`:(nowM?`<span class="feed-tr">${nowM.label}</span>`:'')}${r.restartDate?`<span class="feed-rd">дата перезапуска ${r.restartDate}</span>`:''}</div>
-          ${r.comment?`<div class="feed-cm">${esc(r.comment)}</div>`:'<div class="feed-cm empty">— без комментария —</div>'}
-        </div></div>`;}).join(''):'<div class="trk-empty">Пока нет записей. Решения и комментарии из проработки будут появляться здесь автоматически.</div>'}</div>`;
+  card.innerHTML=`<div class="trk-bh"><span class="trk-bn" style="--c:#2D7CFF">≡</span>Лента изменений <span class="trk-bhs">карточка на каждый товар: история комментариев + выводы ИИ</span>
+    <div class="art-inline-ctrl"><input class="art-search" id="feedSearch" placeholder="Поиск по товару / артикулу / комментарию…" value="${esc(STATE.feedSearch||'')}"></div></div>
+    <div style="display:flex;flex-direction:column;gap:16px">${list.length?list.map(P=>{
+      const mm=met[P.art]||{spend:0,rev:0,orders:0,stock:null,tools:new Set(),brand:P.brand};
+      const drr=mm.rev?(mm.spend/mm.rev*100):0;
+      return `<div class="prod-card" style="border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--card)">
+        <div style="padding:14px 16px;background:linear-gradient(180deg,#F7F9FC,#fff);border-bottom:1px solid var(--line)">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-weight:800;font-size:16px;color:var(--ink)">${esc(P.name)}</span>${bChip(mm.brand||P.brand)}
+            <span style="font-size:12px;color:var(--muted);font-family:ui-monospace,monospace">${esc(P.art)}</span>
+            <span style="margin-left:auto;display:flex;gap:6px">${tChips(mm.tools)}</span></div>
+          <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px;font-size:12.5px;color:var(--muted)">
+            <span>Расход <b style="color:var(--ink)">${money(Math.round(mm.spend))}</b></span>
+            <span>Выручка <b style="color:var(--ink)">${money(Math.round(mm.rev))}</b></span>
+            <span>ДРР <b style="color:${drr>100?'#E5484D':drr>60?'#E0691A':'#16A34A'}">${drr.toFixed(1)}%</b></span>
+            <span>Заказы <b style="color:var(--ink)">${mm.orders}</b></span>
+            ${mm.stock!=null?`<span>Остаток <b style="color:var(--ink)">${mm.stock}</b> шт</span>`:''}
+            <span>комментариев <b style="color:var(--ink)">${P.comments.length}</b></span></div></div>
+        <div style="padding:14px 16px;display:flex;gap:14px;flex-wrap:wrap">${aiBlk(P,'strategy','📈 Стратегия продвижения','#16A34A')}${aiBlk(P,'pain','⚠️ Карта боли','#E5484D')}</div>
+        <div style="padding:0 16px 14px">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;letter-spacing:.5px">ИСТОРИЯ КОММЕНТАРИЕВ</div>
+          ${P.comments.length?[...P.comments].sort((a,b)=>b.ts-a.ts).map(c=>`<div style="display:flex;gap:10px;padding:8px 0;border-top:1px solid #F0F3F8"><div style="min-width:130px;font-size:11px;color:var(--muted)"><b style="color:var(--ink)">${esc(c.author)}</b><br>${fmtDT(c.ts)}</div><div style="font-size:13.5px;white-space:pre-wrap;color:var(--ink)">${esc(c.text)}</div></div>`).join(''):'<div style="color:var(--muted);font-size:13px">Пока нет комментариев по этому товару.</div>'}</div>
+      </div>`;
+    }).join(''):'<div class="trk-empty">Пока нет комментариев. Как маркетологи начнут комментировать РК в проработке — товары появятся здесь карточками с накопительной историей и выводами ИИ.</div>'}</div>`;
   m.appendChild(card);
-  card.querySelectorAll('.art-tab[data-fa]').forEach(b=>b.onclick=()=>{STATE.feedAction=b.getAttribute('data-fa');viewMonitoring();});
-  const fi=document.getElementById('feedSearch');if(fi)fi.oninput=()=>{STATE.feedSearch=fi.value;viewMonitoring();const n=document.getElementById('feedSearch');if(n){const v=n.value;n.focus();n.setSelectionRange(v.length,v.length);}};
-  card.querySelectorAll('.feed-row[data-id]').forEach(r=>r.onclick=()=>{STATE.view='bed';STATE.bed=r.getAttribute('data-bed');STATE._lastBed=r.getAttribute('data-bed');STATE.bedSearch=r.getAttribute('data-id');STATE.bedStatusFilter=null;STATE.bedPlacement=null;STATE.bedSort=null;render();window.scrollTo(0,0);});
+  const fi=document.getElementById('feedSearch');if(fi)fi.oninput=()=>{STATE.feedSearch=fi.value;viewMonitoring();const n=document.getElementById('feedSearch');if(n){n.focus();n.selectionStart=n.selectionEnd=n.value.length;}};
+  function payload(art){const P=PMAP[art];if(!P)return null;const mm=met[art]||{};const drr=mm.rev?(mm.spend/mm.rev*100):0;
+    return {product:{art:P.art,name:P.name,brand:mm.brand||P.brand,metrics:`расход ${Math.round(mm.spend)}, выручка ${Math.round(mm.rev)}, ДРР ${drr.toFixed(1)}%, заказы ${mm.orders||0}${mm.stock!=null?', остаток '+mm.stock:''}`},
+      comments:[...P.comments].sort((a,b)=>a.ts-b.ts).map(c=>({author:c.author,ts:fmtDT(c.ts),text:c.text}))};
+  }
+  card.querySelectorAll('.ai-gen').forEach(b=>b.onclick=()=>{
+    if(!SHARED){toast('Общий режим выключен — ИИ недоступен',true);return;}
+    const art=b.getAttribute('data-art'),kind=b.getAttribute('data-kind'),pl=payload(art);
+    if(!pl||!pl.comments.length){toast('Нет комментариев для анализа',true);return;}
+    const ta=b.closest('.ai-blk').querySelector('.ai-ta'),old=b.textContent;b.disabled=true;b.textContent='✦ Думаю…';
+    Sync.genAI(kind,pl.product,pl.comments).then(text=>{if(ta)ta.value=text;return Sync.saveNote(art,kind,text,true);}).then(()=>toast('Вывод ИИ готов и сохранён')).catch(e=>toast('ИИ: '+(e.message||'ошибка'),true)).finally(()=>{b.disabled=false;b.textContent=old;});
+  });
+  card.querySelectorAll('.ai-save').forEach(b=>b.onclick=()=>{
+    if(!SHARED){toast('Общий режим выключен',true);return;}
+    const art=b.getAttribute('data-art'),kind=b.getAttribute('data-kind'),ta=b.closest('.ai-blk').querySelector('.ai-ta');
+    Sync.saveNote(art,kind,ta?ta.value:'',false).then(()=>toast('Сохранено')).catch(()=>toast('Не сохранилось',true));
+  });
+  card.querySelectorAll('.ai-clear').forEach(b=>b.onclick=()=>{
+    const art=b.getAttribute('data-art'),kind=b.getAttribute('data-kind'),ta=b.closest('.ai-blk').querySelector('.ai-ta');if(ta)ta.value='';
+    if(SHARED)Sync.saveNote(art,kind,'',false).then(()=>toast('Очищено')).catch(()=>{});
+  });
 }
 function monLog(m){
   const store=MilestoneStore.load(),manual=store.events,auto=autoMilestones(),allEv=manual.concat(auto);
@@ -2792,7 +2851,7 @@ document.getElementById('fileInput').addEventListener('change',e=>{if(e.target.f
 var SHARED=false;
 var USER=(function(){try{return localStorage.getItem('trk_user')||'';}catch(e){return'';}})();
 var SyncCache={
-  comments:{}, threads:{}, statuses:{}, snapshots:[], feed:[], users:[],
+  comments:{}, threads:{}, statuses:{}, snapshots:[], feed:[], users:[], notes:{},
   rebuildLatest(){this.comments={};for(const id in this.threads){const a=this.threads[id];if(a&&a.length){const x=a[a.length-1];this.comments[id]={text:x.text,author:x.author,ts:x.ts};}}},
   commentsLatest(){const o={};for(const k in this.comments)o[k]=this.comments[k].text;return o;},
   _cc(){let n=0;for(const k in this.threads)n+=this.threads[k].length;return n;},
@@ -2821,6 +2880,7 @@ var Sync={
       SyncCache.snapshots=Array.isArray(d.snapshots)?d.snapshots:[];
       SyncCache.feed=Array.isArray(d.feed)?d.feed:[];
       SyncCache.users=d.users||[];
+      try{const n=await Net.get('/notes');SyncCache.notes=n.notes||{};}catch(e){SyncCache.notes={};}
       SHARED=true;
     }catch(e){SHARED=false;}
     return SHARED;
@@ -2849,6 +2909,17 @@ var Sync={
   postSnapshot(snap){Net.post('/snapshot',{snap:snap}).catch(()=>toast('Снапшот не отправился на сервер',true));},
   deleteSnapshot(date){Net.del('/snapshot?date='+encodeURIComponent(date)).catch(()=>{});},
   clearSnapshots(){Net.del('/snapshots').catch(()=>{});},
+  saveNote(art,kind,text,ai){
+    SyncCache.notes[art]=SyncCache.notes[art]||{};
+    SyncCache.notes[art][kind]={text:text,author:USER||'аноним',ts:Date.now(),ai:!!ai};
+    return Net.post('/notes',{art:art,kind:kind,text:text,ai:!!ai});
+  },
+  genAI(kind,product,comments){
+    return Net.post('/ai',{kind:kind,product:product,comments:comments}).then(r=>{
+      if(!r||r.ok===false)throw new Error((r&&r.error)||'ИИ недоступен');
+      return r.text;
+    });
+  },
   startPolling(){
     if(!SHARED||this._poll)return;
     let last=SyncCache._sig();
