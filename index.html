@@ -2915,10 +2915,8 @@ var Sync={
     return Net.post('/notes',{art:art,kind:kind,text:text,ai:!!ai});
   },
   genAI(kind,product,comments){
-    return Net.post('/ai',{kind:kind,product:product,comments:comments}).then(r=>{
-      if(!r||r.ok===false)throw new Error((r&&r.error)||'ИИ недоступен');
-      return r.text;
-    });
+    return fetch('/api/ai',{method:'POST',headers:{'Content-Type':'application/json','X-User':encodeURIComponent(USER||'аноним')},body:JSON.stringify({kind:kind,product:product,comments:comments})})
+      .then(async r=>{let j=null;try{j=await r.json();}catch(e){}if(!r.ok||!j||j.ok===false)throw new Error((j&&j.error)||('сервер вернул '+r.status));return j.text;});
   },
   startPolling(){
     if(!SHARED||this._poll)return;
