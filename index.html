@@ -1641,7 +1641,7 @@ function monFeed(m){
   };
   const card=el('div','trk-block');
   card.innerHTML=`<div class="trk-bh"><span class="trk-bn" style="--c:#2D7CFF">≡</span>Лента изменений <span class="trk-bhs">карточка на каждый товар: история комментариев + выводы ИИ</span>
-    <div class="art-inline-ctrl"><input class="art-search" id="feedSearch" placeholder="Поиск по товару / артикулу / комментарию…" value="${esc(STATE.feedSearch||'')}"></div></div>
+    <div class="art-inline-ctrl" style="display:flex;gap:8px;align-items:center"><input class="art-search" id="feedSearch" placeholder="Поиск по товару / артикулу / комментарию…" value="${esc(STATE.feedSearch||'')}">${SHARED?'<button id="dedupBtn" class="btn-ghost" style="white-space:nowrap;padding:8px 12px;font-size:12.5px">Убрать дубли</button>':''}</div></div>
     <div style="display:flex;flex-direction:column;gap:16px">${list.length?list.map(P=>{
       const mm=met[P.art]||{spend:0,rev:0,orders:0,stock:null,tools:new Set(),brand:P.brand};
       const drr=mm.rev?(mm.spend/mm.rev*100):0;
@@ -1666,6 +1666,7 @@ function monFeed(m){
     }).join(''):'<div class="trk-empty">Пока нет комментариев. Как маркетологи начнут комментировать РК в проработке — товары появятся здесь карточками с накопительной историей и выводами ИИ.</div>'}</div>`;
   m.appendChild(card);
   const fi=document.getElementById('feedSearch');if(fi)fi.oninput=()=>{STATE.feedSearch=fi.value;viewMonitoring();const n=document.getElementById('feedSearch');if(n){n.focus();n.selectionStart=n.selectionEnd=n.value.length;}};
+  const db2=document.getElementById('dedupBtn');if(db2)db2.onclick=()=>{if(!confirm('Удалить повторяющиеся комментарии (одинаковый текст по одной РК подряд)? Действие затрагивает общую базу.'))return;db2.disabled=true;db2.textContent='Убираю…';Sync.dedup().then(n=>{toast(n>0?('Удалено дублей: '+n):'Дублей не найдено');viewMonitoring();}).catch(()=>{toast('Не удалось',true);db2.disabled=false;db2.textContent='Убрать дубли';});};
   function payload(art){const P=PMAP[art];if(!P)return null;const mm=met[art]||{};const drr=mm.rev?(mm.spend/mm.rev*100):0;
     return {product:{art:P.art,name:P.name,brand:mm.brand||P.brand,metrics:`расход ${Math.round(mm.spend)}, выручка ${Math.round(mm.rev)}, ДРР ${drr.toFixed(1)}%, заказы ${mm.orders||0}${mm.stock!=null?', остаток '+mm.stock:''}`},
       comments:[...P.comments].sort((a,b)=>a.ts-b.ts).map(c=>({author:c.author,ts:fmtDT(c.ts),text:c.text}))};
@@ -2922,6 +2923,7 @@ var Sync={
     return fetch('/api/ai',{method:'POST',headers:{'Content-Type':'application/json','X-User':encodeURIComponent(USER||'аноним')},body:JSON.stringify({kind:kind,product:product,comments:comments})})
       .then(async r=>{let j=null;try{j=await r.json();}catch(e){}if(!r.ok||!j||j.ok===false)throw new Error((j&&j.error)||('сервер вернул '+r.status));return j.text;});
   },
+  dedup(){return Net.post('/dedup',{}).then(async r=>{await Sync.hydrate();return (r&&r.removed)||0;});},
   startPolling(){
     if(!SHARED||this._poll)return;
     let last=SyncCache._sig();
